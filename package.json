@@ -19,7 +19,13 @@
     "test": "vitest run",
     "test:unit": "vitest run test/unit",
     "test:integration": "vitest run test/integration",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "pubsub:setup": "tsx scripts/pubsub-setup.ts",
+    "pubsub:publish": "tsx scripts/publish-message.ts",
+    "pubsub:pull": "tsx scripts/pull-messages.ts",
+    "make:message": "tsx scripts/make-message.ts",
+    "samples:generate": "tsx scripts/generate-samples.ts",
+    "test:emulator": "vitest run test/integration/pubsub-emulator.test.ts"
   },
   "dependencies": {
     "@google-cloud/pubsub": "^6.3.1",
