@@ -1,0 +1,6 @@
+project_id = "my-gcp-project"
+region     = "europe-west4"
+image      = "europe-west4-docker.pkg.dev/my-gcp-project/services/ubl-order-transformer:1.0.0"
+
+max_delivery_attempts               = 5
+undeliverable_max_delivery_attempts = 10
