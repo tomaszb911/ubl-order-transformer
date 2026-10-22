@@ -1,4 +1,4 @@
-import { pino, type Logger, type LoggerOptions } from 'pino';
+import { pino, type DestinationStream, type Logger, type LoggerOptions } from 'pino';
 
 /** pino level -> Cloud Logging severity (https://cloud.google.com/logging/docs/structured-logging). */
 const SEVERITY: Record<string, string> = {
@@ -14,6 +14,8 @@ export interface LoggerConfig {
   level: string;
   pretty?: boolean;
   serviceName: string;
+  /** Defaults to stdout; injectable for tests. */
+  destination?: DestinationStream;
 }
 
 /**
@@ -21,7 +23,12 @@ export interface LoggerConfig {
  * and an RFC 3339 `time`, so Cloud Run logs are filterable by jsonPayload fields
  * (e.g. `jsonPayload.messageId="7a1e78c9"`).
  */
-export function createLogger({ level, pretty = false, serviceName }: LoggerConfig): Logger {
+export function createLogger({
+  level,
+  pretty = false,
+  serviceName,
+  destination,
+}: LoggerConfig): Logger {
   const options: LoggerOptions = {
     level,
     messageKey: 'message',
@@ -36,10 +43,13 @@ export function createLogger({ level, pretty = false, serviceName }: LoggerConfi
       transport: { target: 'pino-pretty', options: { messageKey: 'message' } },
     });
   }
-  return pino({
+  const cloudLoggingOptions: LoggerOptions = {
     ...options,
     formatters: {
       level: (label) => ({ severity: SEVERITY[label] ?? 'DEFAULT' }),
     },
-  });
+  };
+  return destination === undefined
+    ? pino(cloudLoggingOptions)
+    : pino(cloudLoggingOptions, destination);
 }

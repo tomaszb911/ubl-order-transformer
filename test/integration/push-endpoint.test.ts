@@ -291,6 +291,41 @@ describe(`POST ${PUSH_ENDPOINT}`, () => {
   });
 });
 
+describe('request size limit', () => {
+  it('rejects messages above the configured body limit', async () => {
+    const app = buildApp({
+      processor: createTestProcessor().processor,
+      logger: silentLogger,
+      bodyLimitBytes: 1024,
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: PUSH_ENDPOINT,
+      payload: inboundMessage(),
+    });
+
+    expect(response.statusCode).toBe(413);
+    expect(response.json()).toEqual({
+      error: 'ValidationError',
+      message: 'Message exceeds the maximum allowed size.',
+      messageId: null,
+    });
+    await app.close();
+  });
+});
+
+describe('unknown routes', () => {
+  it('returns 404', async () => {
+    const app = buildApp({ processor: createTestProcessor().processor, logger: silentLogger });
+
+    const response = await app.inject({ method: 'GET', url: '/nope' });
+
+    expect(response.statusCode).toBe(404);
+    await app.close();
+  });
+});
+
 describe('GET /healthz', () => {
   it('reports the service as healthy', async () => {
     const app = buildApp({ processor: createTestProcessor().processor, logger: silentLogger });
