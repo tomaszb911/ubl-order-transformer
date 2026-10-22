@@ -1,5 +1,7 @@
 # UBL Order Transformer
 
+[![CI](https://github.com/tomaszb911/kramp_assesment/actions/workflows/ci.yml/badge.svg)](https://github.com/tomaszb911/kramp_assesment/actions/workflows/ci.yml)
+
 Event-driven service that receives **Base64-encoded UBL 2.1 Order XML** documents from a
 Pub/Sub **push subscription**, transforms them into the target **JSON order** model and publishes
 the result to an output topic. Built to run on **Cloud Run** (TypeScript / Node.js 22, Fastify),
