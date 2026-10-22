@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint, typecheck & test
+    runs-on: ubuntu-latest
+    env:
+      PUBSUB_EMULATOR_HOST: localhost:8085
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Start Pub/Sub emulator
+        run: |
+          docker run -d --name pubsub-emulator -p 8085:8085 \
+            gcr.io/google.com/cloudsdktool/google-cloud-cli:588.0.0-emulators \
+            gcloud beta emulators pubsub start --host-port=0.0.0.0:8085 --project=local-project
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm run build
+
+      - name: Wait for Pub/Sub emulator
+        run: timeout 120 bash -c 'until curl -sf http://localhost:8085; do sleep 2; done'
+
+      - name: Unit & integration tests (incl. emulator)
+        run: npm run test:coverage
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build image
+        run: docker build -t ubl-order-transformer:${{ github.sha }} .
+      - name: Smoke test container
+        run: |
+          docker run -d --name app -p 8080:8080 -e PUBLISHER=log ubl-order-transformer:${{ github.sha }}
+          timeout 30 bash -c 'until curl -sf http://localhost:8080/healthz; do sleep 1; done'
+          status=$(curl -s -o response.json -w '%{http_code}' -X POST http://localhost:8080/pubsub/push \
+            -H 'content-type: application/json' -d @samples/messages/valid-order.json)
+          cat response.json
+          test "$status" = "200"
+
+  terraform:
+    name: Terraform
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v5
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
