@@ -1,0 +1,49 @@
+# Ready-made requests for VS Code "REST Client" or JetBrains HTTP Client.
+# Start the service first, e.g.: docker run --rm -p 8080:8080 -e PUBLISHER=log ubl-order-transformer
+
+@baseUrl = http://localhost:8080
+
+### Health check
+GET {{baseUrl}}/healthz
+
+### Valid order (business message posted directly) -> 200 + transformed order
+POST {{baseUrl}}/pubsub/push
+Content-Type: application/json
+
+< ./samples/messages/valid-order.json
+
+### Valid order wrapped in a Pub/Sub push envelope (what Cloud Run receives) -> 200
+POST {{baseUrl}}/pubsub/push
+Content-Type: application/json
+
+< ./samples/messages/pubsub-push-envelope.json
+
+### Single order line, other unit of measure -> 200
+POST {{baseUrl}}/pubsub/push
+Content-Type: application/json
+
+< ./samples/messages/valid-order-single-line.json
+
+### Invalid Base64 -> 400 InvalidBase64
+POST {{baseUrl}}/pubsub/push
+Content-Type: application/json
+
+< ./samples/messages/invalid-base64.json
+
+### Invalid XML -> 400 InvalidXml
+POST {{baseUrl}}/pubsub/push
+Content-Type: application/json
+
+< ./samples/messages/invalid-xml.json
+
+### Missing Order/ID -> 400 ValidationError "Order ID is required."
+POST {{baseUrl}}/pubsub/push
+Content-Type: application/json
+
+< ./samples/messages/missing-order-id.json
+
+### Missing document -> 400 ValidationError "document is required."
+POST {{baseUrl}}/pubsub/push
+Content-Type: application/json
+
+< ./samples/messages/missing-document.json
