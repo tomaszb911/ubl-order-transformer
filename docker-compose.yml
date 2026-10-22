@@ -1,6 +1,6 @@
 # Local end-to-end environment: Pub/Sub emulator + the service + topic/subscription setup.
 #
-#   docker compose up --build -d
+#   docker compose up --build -d --wait
 #   npm run pubsub:publish -- samples/messages/valid-order.json
 #   npm run pubsub:pull
 #
@@ -35,10 +35,14 @@ services:
       LOG_LEVEL: info
       MAX_DELIVERY_ATTEMPTS: '5'
     ports:
-      - '8080:8080'
+      - '${APP_PORT:-8080}:8080'
     depends_on:
       pubsub-emulator:
         condition: service_healthy
+      # Topics must exist before the service publishes; with `up --wait` this also means
+      # everything is ready once the command returns.
+      pubsub-setup:
+        condition: service_completed_successfully
     healthcheck:
       test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:8080/healthz']
       interval: 2s
@@ -46,13 +50,15 @@ services:
       retries: 30
 
   # One-off job: creates topics, the push subscription (-> app) and debug pull subscriptions.
+  # Pub/Sub only calls the push endpoint once messages arrive, so the app need not be up yet.
   pubsub-setup:
+    build: .
     image: ubl-order-transformer:local
     command: ['node', 'dist/scripts/pubsub-setup.js']
     environment:
       <<: *pubsub-env
       PUSH_ENDPOINT: http://app:8080/pubsub/push
     depends_on:
-      app:
+      pubsub-emulator:
         condition: service_healthy
     restart: 'no'

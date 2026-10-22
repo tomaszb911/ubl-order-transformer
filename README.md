@@ -61,7 +61,7 @@ curl -s -X POST http://localhost:8080/pubsub/push \
 
 ```bash
 npm ci
-docker compose up --build -d                      # emulator + service + topics/push subscription
+docker compose up --build -d --wait               # emulator + topics/push subscription + service
 npm run pubsub:publish -- samples/messages/valid-order.json samples/messages/invalid-xml.json
 npm run pubsub:pull                               # shows orders.transformed and orders.failed
 docker compose logs app                           # structured logs of the service
@@ -394,7 +394,7 @@ is set, so they cannot publish to a real project by accident.
 
 1. **Through Pub/Sub (emulator)** – the real event-driven path:
    ```bash
-   docker compose up --build -d
+   docker compose up --build -d --wait
    npm run pubsub:publish -- samples/messages/valid-order.json
    npm run pubsub:publish -- samples/ubl/order-single-line.xml   # raw XML gets a generated messageId
    npm run pubsub:pull
@@ -428,7 +428,7 @@ keeps this table true.
 
 ```bash
 npm test                                                   # 149 tests, no external dependencies
-docker compose up -d pubsub-emulator
+docker compose up -d --wait pubsub-emulator
 PUBSUB_EMULATOR_HOST=localhost:8085 npm run test:coverage  # + tests against the Pub/Sub emulator
 ```
 
@@ -467,9 +467,11 @@ Multi-stage build (TypeScript compiled in the build stage, only production depen
 runtime stage), runs as the non-root `node` user, handles `SIGTERM` gracefully (Cloud Run sends it
 before stopping an instance; the Pub/Sub client is flushed and closed).
 
-`docker compose up --build` starts the complete local environment: Pub/Sub emulator, the service
-(`PUBLISHER=pubsub`) and a one-off job creating the topics, the push subscription
-`orders.ubl.received → http://app:8080/pubsub/push` and debug pull subscriptions.
+`docker compose up --build -d --wait` starts the complete local environment: Pub/Sub emulator, a
+one-off job creating the topics, the push subscription `orders.ubl.received → http://app:8080/pubsub/push`
+and debug pull subscriptions, and then the service (`PUBLISHER=pubsub`). `--wait` returns once
+everything is ready. Ports: `8085` (emulator) and `8080` (service; change with `APP_PORT=8081 docker compose up …`
+if 8080 is taken).
 
 ---
 

@@ -18,7 +18,7 @@ import {
 /**
  * Runs against the Pub/Sub emulator (skipped when PUBSUB_EMULATOR_HOST is not set):
  *
- *   docker compose up -d pubsub-emulator
+ *   docker compose up -d --wait pubsub-emulator
  *   PUBSUB_EMULATOR_HOST=localhost:8085 npm run test:emulator
  */
 describe.skipIf(!process.env.PUBSUB_EMULATOR_HOST)('PubSubPublisher (emulator)', () => {
@@ -27,12 +27,13 @@ describe.skipIf(!process.env.PUBSUB_EMULATOR_HOST)('PubSubPublisher (emulator)',
   const outputTopic = `orders.transformed.test-${suffix}`;
   const deadLetterTopic = `orders.failed.test-${suffix}`;
 
-  let pubsub: PubSub;
-  let subscriber: v1.SubscriberClient;
+  let pubsub: PubSub | undefined;
+  let subscriber: v1.SubscriberClient | undefined;
   let processor: OrderProcessor;
-  let publisher: PubSubPublisher;
+  let publisher: PubSubPublisher | undefined;
 
   beforeAll(async () => {
+    await assertEmulatorReachable(process.env.PUBSUB_EMULATOR_HOST ?? '');
     process.env.METADATA_SERVER_DETECTION ??= 'none';
     pubsub = new PubSub({ projectId });
     for (const topic of [outputTopic, deadLetterTopic]) {
@@ -52,13 +53,16 @@ describe.skipIf(!process.env.PUBSUB_EMULATOR_HOST)('PubSubPublisher (emulator)',
   });
 
   afterAll(async () => {
-    await Promise.all([outputTopic, deadLetterTopic].map((t) => pubsub.topic(t).delete()));
-    await publisher.close();
-    await subscriber.close();
-    await pubsub.close();
+    if (pubsub === undefined) return; // emulator was not reachable, nothing was created
+    const client = pubsub;
+    await Promise.all([outputTopic, deadLetterTopic].map((t) => client.topic(t).delete()));
+    await publisher?.close();
+    await subscriber?.close();
+    await client.close();
   });
 
   async function pull(topic: string) {
+    if (subscriber === undefined) throw new Error('Subscriber not initialised');
     const subscription = subscriber.subscriptionPath(projectId, `${topic}.sub`);
     const [response] = await subscriber.pull({
       subscription,
@@ -92,3 +96,15 @@ describe.skipIf(!process.env.PUBSUB_EMULATOR_HOST)('PubSubPublisher (emulator)',
     ]);
   });
 });
+
+/** Fails fast with a helpful message instead of a gRPC timeout when the emulator is down. */
+async function assertEmulatorReachable(host: string): Promise<void> {
+  try {
+    await fetch(`http://${host}`, { signal: AbortSignal.timeout(2000) });
+  } catch {
+    throw new Error(
+      `Pub/Sub emulator is not reachable at PUBSUB_EMULATOR_HOST=${host}. ` +
+        'Start it with `docker compose up -d --wait pubsub-emulator` (it listens on localhost:8085).',
+    );
+  }
+}
