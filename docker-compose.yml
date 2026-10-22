@@ -1,0 +1,58 @@
+# Local end-to-end environment: Pub/Sub emulator + the service + topic/subscription setup.
+#
+#   docker compose up --build -d
+#   npm run pubsub:publish -- samples/messages/valid-order.json
+#   npm run pubsub:pull
+#
+# Flow: publish -> orders.ubl.received -> (push subscription) -> app -> orders.transformed / orders.failed
+
+name: ubl-order-transformer
+
+x-pubsub-env: &pubsub-env
+  PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
+  GOOGLE_CLOUD_PROJECT: local-project
+  # No GCE metadata server locally: skip google-auth's lookup (~3 s timeout per client).
+  METADATA_SERVER_DETECTION: none
+
+services:
+  pubsub-emulator:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:588.0.0-emulators
+    command: gcloud beta emulators pubsub start --host-port=0.0.0.0:8085 --project=local-project
+    ports:
+      - '8085:8085'
+    healthcheck:
+      test: ['CMD', 'curl', '-sf', 'http://localhost:8085']
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  app:
+    build: .
+    image: ubl-order-transformer:local
+    environment:
+      <<: *pubsub-env
+      PUBLISHER: pubsub
+      LOG_LEVEL: info
+      MAX_DELIVERY_ATTEMPTS: '5'
+    ports:
+      - '8080:8080'
+    depends_on:
+      pubsub-emulator:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:8080/healthz']
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # One-off job: creates topics, the push subscription (-> app) and debug pull subscriptions.
+  pubsub-setup:
+    image: ubl-order-transformer:local
+    command: ['node', 'dist/scripts/pubsub-setup.js']
+    environment:
+      <<: *pubsub-env
+      PUSH_ENDPOINT: http://app:8080/pubsub/push
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: 'no'
