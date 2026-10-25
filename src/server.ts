@@ -7,6 +7,7 @@ import type { MessagePublisher } from './application/ports.js';
 import { loadConfig } from './config.js';
 import { buildApp } from './http/app.js';
 import { createLogger } from './logger.js';
+import { createShutdownHandler } from './shutdown.js';
 
 /** Composition root: wires configuration, adapters and the HTTP server together. */
 async function main(): Promise<void> {
@@ -40,17 +41,13 @@ async function main(): Promise<void> {
   });
 
   // Cloud Run sends SIGTERM and allows ~10 s to finish in-flight requests.
+  const shutdown = createShutdownHandler({
+    close: () => app.close(),
+    logger,
+    timeoutMs: config.shutdownTimeoutMs,
+  });
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
-    process.once(signal, () => {
-      logger.info({ signal }, 'Shutting down');
-      app.close().then(
-        () => process.exit(0),
-        (error: unknown) => {
-          logger.error({ err: error }, 'Error during shutdown');
-          process.exit(1);
-        },
-      );
-    });
+    process.once(signal, () => shutdown(signal));
   }
 
   await app.listen({ host: '0.0.0.0', port: config.port });

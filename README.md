@@ -433,22 +433,22 @@ keeps this table true.
 ## Testing
 
 ```bash
-npm test                                                   # 157 tests, no external dependencies
+npm test                                                   # 162 tests, no external dependencies
 docker compose up -d --wait pubsub-emulator
 PUBSUB_EMULATOR_HOST=localhost:8085 npm run test:coverage  # + tests against the Pub/Sub emulator
 ```
 
-| Suite                                            | What it covers                                                                                                                   |
-| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| `test/unit/decode-document`                      | Base64 decoding: strict alphabet/padding, MIME line breaks, BOM, non-UTF-8                                                       |
-| `test/unit/parse-ubl-order`                      | XML parsing: prefixes, UBL root namespace, single line as array, entities, malformed XML, DTD rejection, non-Order root          |
-| `test/unit/map-ubl-order`                        | UBL mapping: expected output, optional fields, types, every validation rule                                                      |
-| `test/unit/inbound-message`                      | Message validation and push-envelope unwrapping                                                                                  |
-| `test/unit/order-processor`                      | Flow + policies: idempotency (incl. concurrency), permanent vs transient errors, retries, DLQ                                    |
-| `test/unit/logger`, `config`, `in-memory-stores` | Cloud Logging format, configuration validation, TTL stores                                                                       |
-| `test/integration/push-endpoint`                 | Full HTTP stack: consume valid/malformed messages, publish transformed order, error contract, DLQ, retries, 204 acks, size limit |
-| `test/integration/samples`                       | Every file in `samples/` produces the documented result                                                                          |
-| `test/integration/pubsub-emulator`               | Real `PubSubPublisher` against the emulator: output topic and DLQ                                                                |
+| Suite                                                        | What it covers                                                                                                                   |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `test/unit/decode-document`                                  | Base64 decoding: strict alphabet/padding, MIME line breaks, BOM, non-UTF-8                                                       |
+| `test/unit/parse-ubl-order`                                  | XML parsing: prefixes, UBL root namespace, single line as array, entities, malformed XML, DTD rejection, non-Order root          |
+| `test/unit/map-ubl-order`                                    | UBL mapping: expected output, optional fields, types, every validation rule                                                      |
+| `test/unit/inbound-message`                                  | Message validation and push-envelope unwrapping                                                                                  |
+| `test/unit/order-processor`                                  | Flow + policies: idempotency (incl. concurrency), permanent vs transient errors, retries, DLQ                                    |
+| `test/unit/logger`, `config`, `in-memory-stores`, `shutdown` | Cloud Logging format, configuration validation, TTL stores, shutdown timeout (fake timers)                                       |
+| `test/integration/push-endpoint`                             | Full HTTP stack: consume valid/malformed messages, publish transformed order, error contract, DLQ, retries, 204 acks, size limit |
+| `test/integration/samples`                                   | Every file in `samples/` produces the documented result                                                                          |
+| `test/integration/pubsub-emulator`                           | Real `PubSubPublisher` against the emulator: output topic and DLQ                                                                |
 
 Integration tests use Fastify's `inject` (no open ports) with the real processor and in-memory
 adapters; only the broker is replaced. Coverage is ~96 % of statements.
@@ -471,7 +471,9 @@ docker run --rm -p 8080:8080 --add-host=host.docker.internal:host-gateway \
 
 Multi-stage build (TypeScript compiled in the build stage, only production dependencies in the
 runtime stage), runs as the non-root `node` user, handles `SIGTERM` gracefully (Cloud Run sends it
-before stopping an instance; the Pub/Sub client is flushed and closed).
+before stopping an instance; in-flight requests finish, the Pub/Sub client is flushed and closed).
+Cloud Run kills the instance ~10 s after `SIGTERM`, so if closing hangs (e.g. Pub/Sub unreachable)
+the service exits on its own after `SHUTDOWN_TIMEOUT_MS` (9 s) with a log line saying why.
 
 `docker compose up --build -d --wait` starts the complete local environment: Pub/Sub emulator, a
 one-off job creating the topics, the push subscription `orders.ubl.received → http://app:8080/pubsub/push`
@@ -530,6 +532,7 @@ GOOGLE_CLOUD_PROJECT=<project> npm run pubsub:publish -- samples/messages/valid-
 | `MAX_DELIVERY_ATTEMPTS`   | `5`                  | Attempts before a transient failure is dead-lettered                               |
 | `IDEMPOTENCY_TTL_SECONDS` | `86400`              | How long processed `messageId`s are remembered                                     |
 | `BODY_LIMIT_BYTES`        | `15728640`           | Max request size (Pub/Sub messages ≤ 10 MB + Base64 envelope overhead)             |
+| `SHUTDOWN_TIMEOUT_MS`     | `9000`               | Force exit if graceful shutdown takes longer (Cloud Run kills ~10 s after SIGTERM) |
 | `LOG_LEVEL`               | `info`               | `trace` … `fatal`, `silent`                                                        |
 | `LOG_PRETTY`              | `false`              | Human-readable logs for local development                                          |
 | `GOOGLE_CLOUD_PROJECT`    | –                    | GCP project (auto-detected on Cloud Run)                                           |
@@ -626,7 +629,8 @@ src/
   http/             Fastify app (push endpoint, health check, error contract)
   config.ts         environment configuration (fail fast)
   logger.ts         Cloud Logging structured logger
-  server.ts         composition root, graceful shutdown
+  shutdown.ts       SIGTERM/SIGINT handling with a shutdown timeout
+  server.ts         composition root
 scripts/            pubsub:setup / publish / pull, make:message, samples:generate
 samples/            ubl/*.xml, messages/*.json, output/*.json
 test/               unit/, integration/, fixtures/

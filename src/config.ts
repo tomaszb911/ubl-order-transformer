@@ -12,6 +12,8 @@ export interface Config {
   maxDeliveryAttempts: number;
   idempotencyTtlSeconds: number;
   bodyLimitBytes: number;
+  /** Graceful-shutdown budget; Cloud Run kills the instance ~10 s after SIGTERM. */
+  shutdownTimeoutMs: number;
 }
 
 const LOG_LEVELS = ['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent'];
@@ -53,6 +55,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     idempotencyTtlSeconds: int('IDEMPOTENCY_TTL_SECONDS', 24 * 60 * 60, 1),
     // Pub/Sub messages are at most 10 MB; the push envelope adds Base64 overhead.
     bodyLimitBytes: int('BODY_LIMIT_BYTES', 15 * 1024 * 1024, 1024),
+    shutdownTimeoutMs: int('SHUTDOWN_TIMEOUT_MS', 9000, 1),
   };
 
   if (problems.length > 0) {

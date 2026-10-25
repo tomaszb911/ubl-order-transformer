@@ -14,6 +14,7 @@ describe('loadConfig', () => {
       maxDeliveryAttempts: 5,
       idempotencyTtlSeconds: 86_400,
       bodyLimitBytes: 15 * 1024 * 1024,
+      shutdownTimeoutMs: 9000,
     });
   });
 
