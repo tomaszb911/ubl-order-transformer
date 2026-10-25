@@ -4,14 +4,30 @@ import type { DeadLetterRecord } from '../../src/application/order-processor.js'
 import {
   EXPECTED_OUTPUT,
   MESSAGE_ID,
+  SAMPLE_XML,
   createTestProcessor,
   inboundMessage,
   pushEnvelope,
   sampleWithout,
   silentLogger,
+  toBase64,
 } from '../helpers.js';
 
 const invalidBase64Message = { messageId: 'bad-1', document: '%%%' };
+
+/** Logger that keeps the JSON lines it writes, to assert on what was logged. */
+function captureLogs() {
+  const lines: Record<string, unknown>[] = [];
+  const logger = pino(
+    {},
+    {
+      write: (line: string) => {
+        lines.push(JSON.parse(line) as Record<string, unknown>);
+      },
+    },
+  );
+  return { lines, logger };
+}
 
 describe('OrderProcessor', () => {
   describe('happy path', () => {
@@ -47,15 +63,7 @@ describe('OrderProcessor', () => {
 
     it('transforms an Order without the UBL namespace and logs a warning', async () => {
       const { processor, publisher } = createTestProcessor();
-      const lines: Record<string, unknown>[] = [];
-      const logger = pino(
-        {},
-        {
-          write: (line: string) => {
-            lines.push(JSON.parse(line) as Record<string, unknown>);
-          },
-        },
-      );
+      const { lines, logger } = captureLogs();
       const xml = sampleWithout(' xmlns="urn:oasis:names:specification:ubl:schema:xsd:Order-2"');
 
       const result = await processor.process(inboundMessage(xml), logger);
@@ -109,6 +117,69 @@ describe('OrderProcessor', () => {
       await processor.process(inboundMessage(undefined, 'b'), silentLogger);
 
       expect(publisher.messagesOn('orders.transformed')).toHaveLength(2);
+    });
+
+    it('flags a replay whose document differs from the original one', async () => {
+      const { processor, publisher } = createTestProcessor();
+      const otherOrder = SAMPLE_XML.replace('<cbc:ID>12347</cbc:ID>', '<cbc:ID>99999</cbc:ID>');
+
+      await processor.process(inboundMessage(), silentLogger);
+      const reused = await processor.process(inboundMessage(otherOrder), silentLogger);
+
+      expect(reused).toEqual({
+        outcome: 'transformed',
+        messageId: MESSAGE_ID,
+        output: EXPECTED_OUTPUT,
+        replayed: true,
+        documentMismatch: true,
+      });
+      expect(publisher.messagesOn('orders.transformed')).toHaveLength(1);
+    });
+
+    it('does not flag the same document encoded with line breaks', async () => {
+      const { processor } = createTestProcessor();
+      const wrapped = toBase64(SAMPLE_XML).replace(/(.{76})/g, '$1\r\n');
+
+      await processor.process(inboundMessage(), silentLogger);
+      const duplicate = await processor.process(
+        { messageId: MESSAGE_ID, document: wrapped },
+        silentLogger,
+      );
+
+      expect(duplicate).toMatchObject({ outcome: 'transformed', replayed: true });
+      expect(duplicate).not.toHaveProperty('documentMismatch');
+    });
+
+    it('flags a different document arriving concurrently with the original', async () => {
+      const { processor, publisher } = createTestProcessor();
+      const otherOrder = SAMPLE_XML.replace('<cbc:ID>12347</cbc:ID>', '<cbc:ID>99999</cbc:ID>');
+
+      const [original, reused] = await Promise.all([
+        processor.process(inboundMessage(), silentLogger),
+        processor.process(inboundMessage(otherOrder), silentLogger),
+      ]);
+
+      expect(original).not.toHaveProperty('documentMismatch');
+      expect(reused).toMatchObject({ replayed: true, documentMismatch: true });
+      expect(publisher.messagesOn('orders.transformed')).toHaveLength(1);
+    });
+
+    it('logs a reused messageId as a warning', async () => {
+      const { processor } = createTestProcessor();
+      const { lines, logger } = captureLogs();
+      const otherOrder = SAMPLE_XML.replace('<cbc:ID>12347</cbc:ID>', '<cbc:ID>99999</cbc:ID>');
+
+      await processor.process(inboundMessage(), logger);
+      await processor.process(inboundMessage(otherOrder), logger);
+
+      expect(lines).toContainEqual(
+        expect.objectContaining({
+          level: 40, // pino "warn"
+          messageId: MESSAGE_ID,
+          documentMismatch: true,
+          msg: 'messageId reused with a different document, earlier result replayed',
+        }),
+      );
     });
 
     it('allows a corrected message to be processed after an earlier failure', async () => {

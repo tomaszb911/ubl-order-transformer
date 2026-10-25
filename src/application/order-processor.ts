@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { decodeDocument } from '../domain/decode-document.js';
 import { type ProcessingError, ServerError, toProcessingError } from '../domain/errors.js';
@@ -35,6 +36,11 @@ export type ProcessingResult =
       output: TransformedOrderMessage;
       /** True when the output was produced earlier and is only replayed (nothing published). */
       replayed: boolean;
+      /**
+       * Set on a replay whose document differs from the one originally processed under the
+       * same messageId - most likely a partner bug. Only reported, the earlier result stands.
+       */
+      documentMismatch?: true;
     }
   | {
       outcome: 'rejected';
@@ -83,7 +89,10 @@ export class OrderProcessor {
   private readonly config: OrderProcessorConfig;
   private readonly clock: () => Date;
   /** Concurrent deliveries of the same messageId share one transformation. */
-  private readonly inFlight = new Map<string, Promise<TransformedOrderMessage>>();
+  private readonly inFlight = new Map<
+    string,
+    { output: Promise<TransformedOrderMessage>; documentHash: string }
+  >();
 
   constructor(deps: OrderProcessorDeps) {
     this.publisher = deps.publisher;
@@ -131,20 +140,22 @@ export class OrderProcessor {
       return { outcome: 'already-dead-lettered', messageId };
     }
 
+    const documentHash = fingerprint(message.document);
+
     const previous = await this.idempotencyStore.get(messageId);
     if (previous !== undefined) {
-      return { outcome: 'transformed', messageId, output: previous, replayed: true };
+      return replay(messageId, previous.output, previous.documentHash !== documentHash);
     }
 
     const running = this.inFlight.get(messageId);
     if (running !== undefined) {
-      return { outcome: 'transformed', messageId, output: await running, replayed: true };
+      return replay(messageId, await running.output, running.documentHash !== documentHash);
     }
 
-    const transformation = this.transformAndPublish(message, context.log);
-    this.inFlight.set(messageId, transformation);
+    const output = this.transformAndPublish(message, documentHash, context.log);
+    this.inFlight.set(messageId, { output, documentHash });
     try {
-      return { outcome: 'transformed', messageId, output: await transformation, replayed: false };
+      return { outcome: 'transformed', messageId, output: await output, replayed: false };
     } finally {
       this.inFlight.delete(messageId);
     }
@@ -152,6 +163,7 @@ export class OrderProcessor {
 
   private async transformAndPublish(
     message: InboundMessage,
+    documentHash: string,
     log: Logger,
   ): Promise<TransformedOrderMessage> {
     const xml = decodeDocument(message.document);
@@ -182,7 +194,7 @@ export class OrderProcessor {
     }
     log.debug({ topic: this.config.outputTopic, publishedId }, 'Transformed order published');
 
-    await this.idempotencyStore.save(message.messageId, output);
+    await this.idempotencyStore.save(message.messageId, { output, documentHash });
     return output;
   }
 
@@ -275,17 +287,26 @@ export class OrderProcessor {
     const metrics = { outcome: result.outcome, durationMs: Math.round(durationMs * 100) / 100 };
 
     switch (result.outcome) {
-      case 'transformed':
-        log.info(
-          {
-            ...metrics,
-            replayed: result.replayed,
-            orderId: result.output.order.orderId,
-            lineCount: result.output.order.lines.length,
-          },
-          result.replayed ? 'Duplicate message, earlier result replayed' : 'Order transformed',
-        );
+      case 'transformed': {
+        const fields = {
+          ...metrics,
+          replayed: result.replayed,
+          orderId: result.output.order.orderId,
+          lineCount: result.output.order.lines.length,
+        };
+        if (result.documentMismatch) {
+          log.warn(
+            { ...fields, documentMismatch: true },
+            'messageId reused with a different document, earlier result replayed',
+          );
+        } else {
+          log.info(
+            fields,
+            result.replayed ? 'Duplicate message, earlier result replayed' : 'Order transformed',
+          );
+        }
         return;
+      }
       case 'already-dead-lettered':
         log.info(metrics, 'Redelivery of a dead-lettered message acknowledged');
         return;
@@ -308,6 +329,30 @@ export class OrderProcessor {
       }
     }
   }
+}
+
+function replay(
+  messageId: string,
+  output: TransformedOrderMessage,
+  documentMismatch: boolean,
+): ProcessingResult {
+  return {
+    outcome: 'transformed',
+    messageId,
+    output,
+    replayed: true,
+    ...(documentMismatch && { documentMismatch: true }),
+  };
+}
+
+/**
+ * SHA-256 of the Base64 document, ignoring line breaks, so the same document encoded with
+ * and without MIME line wrapping is not reported as different.
+ */
+function fingerprint(base64Document: string): string {
+  return createHash('sha256')
+    .update(base64Document.replace(/[\r\n]/g, ''))
+    .digest('hex');
 }
 
 /** ISO 8601 UTC timestamp with second precision, e.g. 2026-07-27T12:01:00Z. */

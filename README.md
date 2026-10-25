@@ -177,13 +177,13 @@ Accepts **either** of these bodies:
 
 ### Responses
 
-| Status                      | When                                                                               | Body                                                             |
-| --------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `200 OK`                    | Order transformed and published (or a duplicate – see [idempotency](#idempotency)) | the transformed order; header `x-idempotent-replay: true\|false` |
-| `204 No Content`            | Pub/Sub **redelivery** of a message that was already moved to the DLQ              | –                                                                |
-| `400 Bad Request`           | Invalid Base64 / XML / missing fields                                              | error contract                                                   |
-| `413 Payload Too Large`     | Body above `BODY_LIMIT_BYTES`                                                      | error contract                                                   |
-| `500 Internal Server Error` | Unexpected / transient error (e.g. publishing failed)                              | error contract                                                   |
+| Status                      | When                                                                               | Body                                                                                                                  |
+| --------------------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `200 OK`                    | Order transformed and published (or a duplicate – see [idempotency](#idempotency)) | the transformed order; header `x-idempotent-replay: true\|false`, `x-document-mismatch: true` on a reused `messageId` |
+| `204 No Content`            | Pub/Sub **redelivery** of a message that was already moved to the DLQ              | –                                                                                                                     |
+| `400 Bad Request`           | Invalid Base64 / XML / missing fields                                              | error contract                                                                                                        |
+| `413 Payload Too Large`     | Body above `BODY_LIMIT_BYTES`                                                      | error contract                                                                                                        |
+| `500 Internal Server Error` | Unexpected / transient error (e.g. publishing failed)                              | error contract                                                                                                        |
 
 **Output message** (published to `orders.transformed` and returned in the response;
 [example](samples/output/transformed-order.json)). Pub/Sub attributes: `messageId`, `orderId`.
@@ -345,7 +345,14 @@ remembers successfully transformed messages by business `messageId` (TTL `IDEMPO
 
 - a duplicate is **not published again**; the earlier output is returned (`x-idempotent-replay: true`);
 - concurrent duplicates on the same instance share one in-flight transformation;
-- failures are not remembered, so a corrected message with the same `messageId` can be processed.
+- failures are not remembered, so a corrected message with the same `messageId` can be processed;
+- a **`messageId` reused for a different document** (most likely a partner bug: two orders, one id) is
+  detected by a SHA-256 fingerprint of the document stored with the result. Policy: **warn, don't
+  reject** – the earlier result is still replayed and nothing is published, but the summary log line
+  is a `WARNING` with `documentMismatch: true` and direct callers get `x-document-mismatch: true`.
+  Rejecting would also be defensible; warning keeps the idempotency contract simple
+  (same `messageId` → same answer) while making the partner problem visible.
+  Line breaks in the Base64 are ignored by the fingerprint, so re-wrapped encodings are not flagged.
 
 > **Limitation (deliberate for this assignment):** the stores are in-memory, i.e. per Cloud Run
 > instance. They sit behind the `IdempotencyStore` / `DeliveryTracker` interfaces; with several
@@ -433,7 +440,7 @@ keeps this table true.
 ## Testing
 
 ```bash
-npm test                                                   # 162 tests, no external dependencies
+npm test                                                   # 167 tests, no external dependencies
 docker compose up -d --wait pubsub-emulator
 PUBSUB_EMULATOR_HOST=localhost:8085 npm run test:coverage  # + tests against the Pub/Sub emulator
 ```

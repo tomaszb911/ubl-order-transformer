@@ -1,5 +1,4 @@
-import type { DeliveryTracker, IdempotencyStore } from '../application/ports.js';
-import type { TransformedOrderMessage } from '../domain/order.js';
+import type { DeliveryTracker, IdempotencyRecord, IdempotencyStore } from '../application/ports.js';
 import { TtlCache } from './ttl-cache.js';
 
 export interface InMemoryStoreOptions {
@@ -17,18 +16,18 @@ const DEFAULT_MAX_ENTRIES = 100_000;
  * interface should be backed by a shared store (Firestore / Memorystore) - see README.
  */
 export class InMemoryIdempotencyStore implements IdempotencyStore {
-  private readonly cache: TtlCache<TransformedOrderMessage>;
+  private readonly cache: TtlCache<IdempotencyRecord>;
 
   constructor({ ttlMs, maxEntries = DEFAULT_MAX_ENTRIES, now }: InMemoryStoreOptions) {
     this.cache = new TtlCache(ttlMs, maxEntries, now);
   }
 
-  get(messageId: string): Promise<TransformedOrderMessage | undefined> {
+  get(messageId: string): Promise<IdempotencyRecord | undefined> {
     return Promise.resolve(this.cache.get(messageId));
   }
 
-  save(messageId: string, output: TransformedOrderMessage): Promise<void> {
-    this.cache.set(messageId, output);
+  save(messageId: string, record: IdempotencyRecord): Promise<void> {
+    this.cache.set(messageId, record);
     return Promise.resolve();
   }
 }

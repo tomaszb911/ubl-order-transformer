@@ -32,11 +32,11 @@ describe('TtlCache', () => {
 });
 
 describe('InMemoryIdempotencyStore', () => {
-  it('returns saved results by messageId', async () => {
+  it('returns saved records by messageId', async () => {
     const store = new InMemoryIdempotencyStore({ ttlMs: 1000 });
-    await store.save('m1', EXPECTED_OUTPUT);
+    await store.save('m1', { output: EXPECTED_OUTPUT, documentHash: 'abc' });
 
-    expect(await store.get('m1')).toEqual(EXPECTED_OUTPUT);
+    expect(await store.get('m1')).toEqual({ output: EXPECTED_OUTPUT, documentHash: 'abc' });
     expect(await store.get('m2')).toBeUndefined();
   });
 });

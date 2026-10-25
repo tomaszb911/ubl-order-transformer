@@ -84,6 +84,10 @@ export function buildApp({
 function sendResult(reply: FastifyReply, result: ProcessingResult): FastifyReply {
   switch (result.outcome) {
     case 'transformed':
+      if (result.documentMismatch) {
+        // Direct callers cannot see our logs; tell them the earlier result was kept.
+        void reply.header('x-document-mismatch', 'true');
+      }
       return reply
         .code(200)
         .header('x-idempotent-replay', String(result.replayed))

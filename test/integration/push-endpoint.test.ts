@@ -5,6 +5,7 @@ import { PUSH_ENDPOINT, buildApp } from '../../src/http/app.js';
 import {
   EXPECTED_OUTPUT,
   MESSAGE_ID,
+  SAMPLE_XML,
   createTestProcessor,
   inboundMessage,
   pushEnvelope,
@@ -87,6 +88,19 @@ describe(`POST ${PUSH_ENDPOINT}`, () => {
       expect(duplicate.statusCode).toBe(200);
       expect(duplicate.headers['x-idempotent-replay']).toBe('true');
       expect(duplicate.json()).toEqual(first.json());
+      expect(publisher.messagesOn('orders.transformed')).toHaveLength(1);
+    });
+    it('flags a messageId reused for a different document with a response header', async () => {
+      const otherOrder = SAMPLE_XML.replace('<cbc:ID>12347</cbc:ID>', '<cbc:ID>99999</cbc:ID>');
+
+      const first = await post(inboundMessage());
+      const reused = await post(inboundMessage(otherOrder));
+
+      expect(first.headers).not.toHaveProperty('x-document-mismatch');
+      expect(reused.statusCode).toBe(200);
+      expect(reused.headers['x-idempotent-replay']).toBe('true');
+      expect(reused.headers['x-document-mismatch']).toBe('true');
+      expect(reused.json()).toEqual(EXPECTED_OUTPUT);
       expect(publisher.messagesOn('orders.transformed')).toHaveLength(1);
     });
   });
