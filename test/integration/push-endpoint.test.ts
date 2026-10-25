@@ -59,6 +59,15 @@ describe(`POST ${PUSH_ENDPOINT}`, () => {
       expect(response.json()).toEqual(EXPECTED_OUTPUT);
     });
 
+    it('accepts an Order without the UBL namespace (logged as a warning)', async () => {
+      const xml = sampleWithout(' xmlns="urn:oasis:names:specification:ubl:schema:xsd:Order-2"');
+
+      const response = await post(inboundMessage(xml));
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual(EXPECTED_OUTPUT);
+    });
+
     it('accepts JSON sent with a non-JSON content type', async () => {
       const response = await app.inject({
         method: 'POST',
@@ -122,6 +131,16 @@ describe(`POST ${PUSH_ENDPOINT}`, () => {
         {
           error: 'ValidationError',
           message: "Document is not a UBL Order (expected root element 'Order', found 'Invoice').",
+          messageId: MESSAGE_ID,
+        },
+      ],
+      [
+        'Order outside the UBL namespace',
+        inboundMessage('<Order xmlns="urn:example:order"><ID>1</ID></Order>'),
+        {
+          error: 'ValidationError',
+          message:
+            "Document is not a UBL Order (expected namespace 'urn:oasis:names:specification:ubl:schema:xsd:Order-2', found 'urn:example:order').",
           messageId: MESSAGE_ID,
         },
       ],

@@ -155,7 +155,11 @@ export class OrderProcessor {
     log: Logger,
   ): Promise<TransformedOrderMessage> {
     const xml = decodeDocument(message.document);
-    const order = mapUblOrder(parseUblOrder(xml));
+    const { order: ublOrder, warnings } = parseUblOrder(xml);
+    for (const warning of warnings) {
+      log.warn({ warning }, 'UBL document accepted with a warning');
+    }
+    const order = mapUblOrder(ublOrder);
     const output: TransformedOrderMessage = {
       messageId: message.messageId,
       transformedAt: formatTimestamp(this.clock()),

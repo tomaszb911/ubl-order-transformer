@@ -4,13 +4,14 @@ import { mapUblOrder } from '../../src/domain/map-ubl-order.js';
 import { parseUblOrder } from '../../src/domain/parse-ubl-order.js';
 import { EXPECTED_OUTPUT, SAMPLE_XML, sampleWithout } from '../helpers.js';
 
-const map = (xml: string) => mapUblOrder(parseUblOrder(xml));
+const map = (xml: string) => mapUblOrder(parseUblOrder(xml).order);
 
+const UBL = 'xmlns="urn:oasis:names:specification:ubl:schema:xsd:Order-2"';
 const CBC = 'xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2"';
 const CAC = 'xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"';
 
 function orderWithLines(lines: string): string {
-  return `<Order ${CBC} ${CAC}>
+  return `<Order ${UBL} ${CBC} ${CAC}>
     <cbc:ID>1</cbc:ID>
     <cbc:IssueDate>2025-01-01</cbc:IssueDate>
     <cac:BuyerCustomerParty><cbc:SupplierAssignedAccountID>99</cbc:SupplierAssignedAccountID></cac:BuyerCustomerParty>
@@ -165,7 +166,7 @@ describe('mapUblOrder', () => {
     });
 
     it('reports all problems at once', () => {
-      const message = mapError('<Order/>');
+      const message = mapError(`<Order ${UBL}/>`);
       expect(message).toBe(
         [
           'Order ID is required.',

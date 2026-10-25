@@ -1,3 +1,4 @@
+import { pino } from 'pino';
 import { describe, expect, it } from 'vitest';
 import type { DeadLetterRecord } from '../../src/application/order-processor.js';
 import {
@@ -6,6 +7,7 @@ import {
   createTestProcessor,
   inboundMessage,
   pushEnvelope,
+  sampleWithout,
   silentLogger,
 } from '../helpers.js';
 
@@ -41,6 +43,32 @@ describe('OrderProcessor', () => {
 
       expect(result).toMatchObject({ outcome: 'transformed', output: EXPECTED_OUTPUT });
       expect(publisher.messagesOn('orders.transformed')).toHaveLength(1);
+    });
+
+    it('transforms an Order without the UBL namespace and logs a warning', async () => {
+      const { processor, publisher } = createTestProcessor();
+      const lines: Record<string, unknown>[] = [];
+      const logger = pino(
+        {},
+        {
+          write: (line: string) => {
+            lines.push(JSON.parse(line) as Record<string, unknown>);
+          },
+        },
+      );
+      const xml = sampleWithout(' xmlns="urn:oasis:names:specification:ubl:schema:xsd:Order-2"');
+
+      const result = await processor.process(inboundMessage(xml), logger);
+
+      expect(result).toMatchObject({ outcome: 'transformed', output: EXPECTED_OUTPUT });
+      expect(publisher.messagesOn('orders.transformed')).toHaveLength(1);
+      expect(lines).toContainEqual(
+        expect.objectContaining({
+          messageId: MESSAGE_ID,
+          msg: 'UBL document accepted with a warning',
+          warning: expect.stringContaining("Root element 'Order' has no namespace"),
+        }),
+      );
     });
   });
 

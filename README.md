@@ -136,7 +136,7 @@ flowchart TB
 | 0. Unwrap push envelope (`message.data`) or accept the message posted directly    | `inbound-message.ts` | `400 ValidationError`                    |
 | 1. Validate message: message, `messageId`, `document` exist, `document` not empty | `inbound-message.ts` | `400 ValidationError`                    |
 | 2. Decode Base64 (strict) → UTF-8 XML                                             | `decode-document.ts` | `400 InvalidBase64` / `400 InvalidXml`   |
-| 3. Parse XML (well-formedness, no DTD, root `Order`)                              | `parse-ubl-order.ts` | `400 InvalidXml` / `400 ValidationError` |
+| 3. Parse XML (well-formedness, no DTD, root `Order` not in a foreign namespace)   | `parse-ubl-order.ts` | `400 InvalidXml` / `400 ValidationError` |
 | 4. Map UBL → JSON, validate required fields                                       | `map-ubl-order.ts`   | `400 ValidationError`                    |
 | 5. Publish to `orders.transformed`                                                | `order-processor.ts` | `500 ServerError` (retried)              |
 
@@ -252,6 +252,12 @@ and stored in the dead-letter record.
 
 - Matching uses **local names**, so it does not depend on the namespace prefixes a partner chooses
   (`cbc:`, `cac:`, `ubl:`…).
+- The root element must be `Order`. Its namespace is checked against the UBL Order namespace
+  `urn:oasis:names:specification:ubl:schema:xsd:Order-2` (as default namespace or bound to any prefix):
+  an `Order` in a **foreign** namespace is another format and is rejected with `ValidationError`;
+  an `Order` **without** a namespace is processed, and a warning is logged with the `messageId`.
+  Strictly by the UBL standard such a document is not UBL, but rejecting otherwise correct XML would
+  only slow down partner onboarding – the warning makes the problem visible without blocking orders.
 - **All** validation problems are reported in one message, so a partner fixing an integration sees
   everything at once, e.g.
   `"OrderLine 2: quantity (LineItem/Quantity) is required. OrderLine 2: unit of measure (LineItem/Quantity/@unitCode) is required."`
@@ -427,7 +433,7 @@ keeps this table true.
 ## Testing
 
 ```bash
-npm test                                                   # 149 tests, no external dependencies
+npm test                                                   # 157 tests, no external dependencies
 docker compose up -d --wait pubsub-emulator
 PUBSUB_EMULATOR_HOST=localhost:8085 npm run test:coverage  # + tests against the Pub/Sub emulator
 ```
@@ -435,7 +441,7 @@ PUBSUB_EMULATOR_HOST=localhost:8085 npm run test:coverage  # + tests against the
 | Suite                                            | What it covers                                                                                                                   |
 | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
 | `test/unit/decode-document`                      | Base64 decoding: strict alphabet/padding, MIME line breaks, BOM, non-UTF-8                                                       |
-| `test/unit/parse-ubl-order`                      | XML parsing: namespaces/prefixes, single line as array, entities, malformed XML, DTD rejection, non-Order root                   |
+| `test/unit/parse-ubl-order`                      | XML parsing: prefixes, UBL root namespace, single line as array, entities, malformed XML, DTD rejection, non-Order root          |
 | `test/unit/map-ubl-order`                        | UBL mapping: expected output, optional fields, types, every validation rule                                                      |
 | `test/unit/inbound-message`                      | Message validation and push-envelope unwrapping                                                                                  |
 | `test/unit/order-processor`                      | Flow + policies: idempotency (incl. concurrency), permanent vs transient errors, retries, DLQ                                    |
@@ -565,6 +571,9 @@ exactly as specified (`Order ID is required.`).
 
 **`fast-xml-parser`** – pure JS (no native build in the container), fast, removes namespace prefixes,
 does not resolve external entities. Combined with explicit `XMLValidator` well-formedness checks and DTD rejection.
+Because removing prefixes also drops the `xmlns` declarations, the root element's namespace is resolved by a
+second, namespace-preserving parse – negligible cost for order-sized documents, and simpler than mapping
+prefixed names by hand.
 
 **Fastify** – small, fast, first-class TypeScript and pino logging (the same logger Cloud Logging
 formatting is built on).
@@ -595,7 +604,7 @@ messages; dependencies are wired by hand in `server.ts`. Fewer moving parts for 
 ## What I would add for production
 
 - **Shared idempotency/delivery store** (Firestore or Memorystore) behind the existing interfaces.
-- **XSD validation** against the official UBL 2.1 schemas (and namespace check of the root element).
+- **XSD validation** against the official UBL 2.1 schemas (today: well-formedness, root element and namespace, required fields).
 - **Pub/Sub schema** (Avro/Protobuf) on `orders.transformed` as the contract for downstream consumers.
 - **Alerting**: on DLQ growth, `ERROR` log rate and p95 `processing_duration`; a small **replay tool**
   that re-publishes records from `orders.failed` after a fix.
