@@ -23,6 +23,7 @@
     "pubsub:setup": "tsx scripts/pubsub-setup.ts",
     "pubsub:publish": "tsx scripts/publish-message.ts",
     "pubsub:pull": "tsx scripts/pull-messages.ts",
+    "pubsub:replay": "tsx scripts/replay-dead-letters.ts",
     "make:message": "tsx scripts/make-message.ts",
     "samples:generate": "tsx scripts/generate-samples.ts",
     "test:emulator": "vitest run test/integration/pubsub-emulator.test.ts"

@@ -327,6 +327,26 @@ Each record contains everything needed to investigate and replay the message
 
 If dead-lettering itself fails, the service answers `500`, so Pub/Sub keeps the message – nothing is lost.
 
+### Replaying dead-lettered messages
+
+After an outage or a fix, `npm run pubsub:replay` takes records from a subscription on `orders.failed`
+and publishes their `originalMessage` to `orders.ubl.received` again, exactly like the partner would:
+
+```bash
+npm run pubsub:replay -- --dry-run                     # list what would be replayed, change nothing
+npm run pubsub:replay -- --error-code ServerError      # replay transient failures only
+npm run pubsub:replay -- --message-id 7a1e78c9         # replay one message
+```
+
+- Replayed records are acknowledged; skipped ones (filters, no business message) are released and stay
+  in the subscription.
+- Filter by `--error-code ServerError` after an outage: messages rejected for invalid content would only
+  fail and be dead-lettered again.
+- A replay is a new Pub/Sub message, so it is processed like any other (a corrected message with the same
+  `messageId` is not blocked, because failures are not remembered by the idempotency store).
+- Locally it reads `orders.failed.debug`; on GCP use `--subscription orders.failed.inspection`
+  (created by Terraform). Note that `npm run pubsub:pull` acknowledges what it prints – run the replay first.
+
 **Safety net:** the Terraform subscription additionally has a native Pub/Sub dead-letter policy
 (`undeliverable_max_delivery_attempts`, default 10 > `MAX_DELIVERY_ATTEMPTS`) forwarding to
 `orders.ubl.received.undeliverable`. It only kicks in when the service cannot answer at all
@@ -391,18 +411,19 @@ Locally `LOG_PRETTY=true` switches to human-readable output.
 
 Prerequisites: Node.js 22 (`.nvmrc`), Docker.
 
-| Command                                                 | Description                                                                                   |
-| ------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `npm run dev`                                           | Start with hot reload (`PUBLISHER=log LOG_PRETTY=true npm run dev` without Pub/Sub)           |
-| `npm test`                                              | Unit + integration tests (emulator tests are skipped unless `PUBSUB_EMULATOR_HOST` is set)    |
-| `npm run test:coverage`                                 | Tests with coverage report                                                                    |
-| `npm run lint` / `npm run typecheck` / `npm run format` | Static checks                                                                                 |
-| `npm run build` / `npm start`                           | Compile to `dist/` and run                                                                    |
-| `npm run pubsub:setup`                                  | Create topics + push subscription in the emulator (done automatically by `docker compose up`) |
-| `npm run pubsub:publish -- <file...>`                   | Publish `.json` messages or raw `.xml` orders to `orders.ubl.received`                        |
-| `npm run pubsub:pull`                                   | Print and ack what was published to `orders.transformed` / `orders.failed`                    |
-| `npm run make:message -- <order.xml> [messageId]`       | Wrap a UBL XML file into a message (Base64)                                                   |
-| `npm run samples:generate`                              | Regenerate `samples/messages` from `samples/ubl`                                              |
+| Command                                                 | Description                                                                                               |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `npm run dev`                                           | Start with hot reload (`PUBLISHER=log LOG_PRETTY=true npm run dev` without Pub/Sub)                       |
+| `npm test`                                              | Unit + integration tests (emulator tests are skipped unless `PUBSUB_EMULATOR_HOST` is set)                |
+| `npm run test:coverage`                                 | Tests with coverage report                                                                                |
+| `npm run lint` / `npm run typecheck` / `npm run format` | Static checks                                                                                             |
+| `npm run build` / `npm start`                           | Compile to `dist/` and run                                                                                |
+| `npm run pubsub:setup`                                  | Create topics + push subscription in the emulator (done automatically by `docker compose up`)             |
+| `npm run pubsub:publish -- <file...>`                   | Publish `.json` messages or raw `.xml` orders to `orders.ubl.received`                                    |
+| `npm run pubsub:pull`                                   | Print and ack what was published to `orders.transformed` / `orders.failed`                                |
+| `npm run pubsub:replay -- [options]`                    | Re-publish dead-lettered messages to the input topic (see [Replaying](#replaying-dead-lettered-messages)) |
+| `npm run make:message -- <order.xml> [messageId]`       | Wrap a UBL XML file into a message (Base64)                                                               |
+| `npm run samples:generate`                              | Regenerate `samples/messages` from `samples/ubl`                                                          |
 
 The helper scripts target the **local emulator** (`localhost:8085`) unless `GOOGLE_CLOUD_PROJECT`
 is set, so they cannot publish to a real project by accident.
@@ -444,7 +465,7 @@ keeps this table true.
 ## Testing
 
 ```bash
-npm test                                                   # 177 tests, no external dependencies
+npm test                                                   # 185 tests, no external dependencies
 docker compose up -d --wait pubsub-emulator
 PUBSUB_EMULATOR_HOST=localhost:8085 npm run test:coverage  # + tests against the Pub/Sub emulator
 ```
@@ -456,6 +477,7 @@ PUBSUB_EMULATOR_HOST=localhost:8085 npm run test:coverage  # + tests against the
 | `test/unit/map-ubl-order`                                    | UBL mapping: expected output, optional fields, types, every validation rule                                                                            |
 | `test/unit/inbound-message`                                  | Message validation and push-envelope unwrapping                                                                                                        |
 | `test/unit/trace`                                            | Trace headers (`traceparent`, `X-Cloud-Trace-Context`) → Cloud Logging trace fields                                                                    |
+| `test/unit/replay`                                           | Which dead-lettered messages the replay script re-publishes (filters, unreplayable records)                                                            |
 | `test/unit/order-processor`                                  | Flow + policies: idempotency (incl. concurrency), permanent vs transient errors, retries, DLQ                                                          |
 | `test/unit/logger`, `config`, `in-memory-stores`, `shutdown` | Cloud Logging format, configuration validation, TTL stores, shutdown timeout (fake timers)                                                             |
 | `test/integration/push-endpoint`                             | Full HTTP stack: consume valid/malformed messages, publish transformed order, error contract, DLQ, retries, 204 acks, size limit, trace fields in logs |
@@ -526,6 +548,7 @@ Then publish a test message to the real topic:
 
 ```bash
 GOOGLE_CLOUD_PROJECT=<project> npm run pubsub:publish -- samples/messages/valid-order.json
+GOOGLE_CLOUD_PROJECT=<project> npm run pubsub:replay -- --subscription orders.failed.inspection --dry-run
 ```
 
 > The configuration passes `terraform validate` (also in CI). In a team setup state would live in a
@@ -621,8 +644,8 @@ messages; dependencies are wired by hand in `server.ts`. Fewer moving parts for 
 - **Shared idempotency/delivery store** (Firestore or Memorystore) behind the existing interfaces.
 - **XSD validation** against the official UBL 2.1 schemas (today: well-formedness, root element and namespace, required fields).
 - **Pub/Sub schema** (Avro/Protobuf) on `orders.transformed` as the contract for downstream consumers.
-- **Alerting**: on DLQ growth, `ERROR` log rate and p95 `processing_duration`; a small **replay tool**
-  that re-publishes records from `orders.failed` after a fix.
+- **Alerting**: on DLQ growth, `ERROR` log rate and p95 `processing_duration`; running the replay as an
+  operational job (today it is a developer script).
 - **OpenTelemetry tracing** propagated via Pub/Sub attributes, end to end across services (today:
   log lines are linked to the Cloud Run request trace only).
 - **CD pipeline**: build → push to Artifact Registry → `terraform apply` from GitHub Actions with
@@ -644,7 +667,7 @@ src/
   logger.ts         Cloud Logging structured logger
   shutdown.ts       SIGTERM/SIGINT handling with a shutdown timeout
   server.ts         composition root
-scripts/            pubsub:setup / publish / pull, make:message, samples:generate
+scripts/            pubsub:setup / publish / pull / replay, make:message, samples:generate
 samples/            ubl/*.xml, messages/*.json, output/*.json
 test/               unit/, integration/, fixtures/
 infra/terraform/    Pub/Sub, Cloud Run, IAM, Artifact Registry, log-based metrics
