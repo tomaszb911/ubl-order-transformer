@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { pino } from 'pino';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { InMemoryPublisher } from '../../src/adapters/in-memory-publisher.js';
 import { PUSH_ENDPOINT, buildApp } from '../../src/http/app.js';
@@ -355,6 +356,42 @@ describe('unknown routes', () => {
     const response = await app.inject({ method: 'GET', url: '/nope' });
 
     expect(response.statusCode).toBe(404);
+    await app.close();
+  });
+});
+
+describe('trace correlation', () => {
+  it('adds the Cloud Run trace to the log lines of a request', async () => {
+    const lines: Record<string, unknown>[] = [];
+    const logger = pino(
+      {},
+      {
+        write: (line: string) => {
+          lines.push(JSON.parse(line) as Record<string, unknown>);
+        },
+      },
+    );
+    const app = buildApp({
+      processor: createTestProcessor().processor,
+      logger,
+      projectId: 'my-project',
+    });
+
+    await app.inject({
+      method: 'POST',
+      url: PUSH_ENDPOINT,
+      headers: { traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' },
+      payload: inboundMessage(),
+    });
+
+    expect(lines).toContainEqual(
+      expect.objectContaining({
+        msg: 'Order transformed',
+        messageId: MESSAGE_ID,
+        'logging.googleapis.com/trace':
+          'projects/my-project/traces/4bf92f3577b34da6a3ce929d0e0e4736',
+      }),
+    );
     await app.close();
   });
 });

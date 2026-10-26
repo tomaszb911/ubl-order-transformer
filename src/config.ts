@@ -5,6 +5,8 @@ export interface Config {
   logLevel: string;
   logPretty: boolean;
   serviceName: string;
+  /** GCP project id, when known; used to link log lines to Cloud Run request traces. */
+  projectId?: string;
   /** `pubsub` publishes to Google Cloud Pub/Sub (or the emulator); `log` only logs (mock). */
   publisher: PublisherMode;
   outputTopic: string;
@@ -48,6 +50,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     logLevel: oneOf('LOG_LEVEL', LOG_LEVELS, 'info'),
     logPretty: env.LOG_PRETTY === 'true',
     serviceName: env.K_SERVICE ?? 'ubl-order-transformer',
+    ...(env.GOOGLE_CLOUD_PROJECT && { projectId: env.GOOGLE_CLOUD_PROJECT }),
     publisher: oneOf<PublisherMode>('PUBLISHER', ['pubsub', 'log'], 'pubsub'),
     outputTopic: env.OUTPUT_TOPIC || 'orders.transformed',
     deadLetterTopic: env.DEAD_LETTER_TOPIC || 'orders.failed',

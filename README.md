@@ -374,6 +374,10 @@ per processed message** is written, carrying the correlation id and the processi
 
 - **Correlation:** every line of a message carries `messageId` (and `pubsubMessageId`), so
   `jsonPayload.messageId="7a1e78c9"` shows its full history across retries and instances.
+- **Request traces:** on GCP (`GOOGLE_CLOUD_PROJECT` set) the trace from the request's `traceparent`
+  or `X-Cloud-Trace-Context` header is added as `logging.googleapis.com/trace` / `spanId` /
+  `trace_sampled`, so Cloud Logging groups all lines of one request and links them to Cloud Trace.
+  Locally (no project) nothing changes.
 - **Severity:** `INFO` success, `WARNING` rejected input (partner problem), `ERROR` transient/server
   failures (our problem) – alerting can target `ERROR` only.
 - **Metrics** (Terraform, log-based): `processing_duration` (distribution of `durationMs` by `outcome`)
@@ -440,22 +444,23 @@ keeps this table true.
 ## Testing
 
 ```bash
-npm test                                                   # 167 tests, no external dependencies
+npm test                                                   # 177 tests, no external dependencies
 docker compose up -d --wait pubsub-emulator
 PUBSUB_EMULATOR_HOST=localhost:8085 npm run test:coverage  # + tests against the Pub/Sub emulator
 ```
 
-| Suite                                                        | What it covers                                                                                                                   |
-| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| `test/unit/decode-document`                                  | Base64 decoding: strict alphabet/padding, MIME line breaks, BOM, non-UTF-8                                                       |
-| `test/unit/parse-ubl-order`                                  | XML parsing: prefixes, UBL root namespace, single line as array, entities, malformed XML, DTD rejection, non-Order root          |
-| `test/unit/map-ubl-order`                                    | UBL mapping: expected output, optional fields, types, every validation rule                                                      |
-| `test/unit/inbound-message`                                  | Message validation and push-envelope unwrapping                                                                                  |
-| `test/unit/order-processor`                                  | Flow + policies: idempotency (incl. concurrency), permanent vs transient errors, retries, DLQ                                    |
-| `test/unit/logger`, `config`, `in-memory-stores`, `shutdown` | Cloud Logging format, configuration validation, TTL stores, shutdown timeout (fake timers)                                       |
-| `test/integration/push-endpoint`                             | Full HTTP stack: consume valid/malformed messages, publish transformed order, error contract, DLQ, retries, 204 acks, size limit |
-| `test/integration/samples`                                   | Every file in `samples/` produces the documented result                                                                          |
-| `test/integration/pubsub-emulator`                           | Real `PubSubPublisher` against the emulator: output topic and DLQ                                                                |
+| Suite                                                        | What it covers                                                                                                                                         |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `test/unit/decode-document`                                  | Base64 decoding: strict alphabet/padding, MIME line breaks, BOM, non-UTF-8                                                                             |
+| `test/unit/parse-ubl-order`                                  | XML parsing: prefixes, UBL root namespace, single line as array, entities, malformed XML, DTD rejection, non-Order root                                |
+| `test/unit/map-ubl-order`                                    | UBL mapping: expected output, optional fields, types, every validation rule                                                                            |
+| `test/unit/inbound-message`                                  | Message validation and push-envelope unwrapping                                                                                                        |
+| `test/unit/trace`                                            | Trace headers (`traceparent`, `X-Cloud-Trace-Context`) → Cloud Logging trace fields                                                                    |
+| `test/unit/order-processor`                                  | Flow + policies: idempotency (incl. concurrency), permanent vs transient errors, retries, DLQ                                                          |
+| `test/unit/logger`, `config`, `in-memory-stores`, `shutdown` | Cloud Logging format, configuration validation, TTL stores, shutdown timeout (fake timers)                                                             |
+| `test/integration/push-endpoint`                             | Full HTTP stack: consume valid/malformed messages, publish transformed order, error contract, DLQ, retries, 204 acks, size limit, trace fields in logs |
+| `test/integration/samples`                                   | Every file in `samples/` produces the documented result                                                                                                |
+| `test/integration/pubsub-emulator`                           | Real `PubSubPublisher` against the emulator: output topic and DLQ                                                                                      |
 
 Integration tests use Fastify's `inject` (no open ports) with the real processor and in-memory
 adapters; only the broker is replaced. Coverage is ~96 % of statements.
@@ -530,20 +535,20 @@ GOOGLE_CLOUD_PROJECT=<project> npm run pubsub:publish -- samples/messages/valid-
 
 ## Configuration
 
-| Variable                  | Default              | Description                                                                        |
-| ------------------------- | -------------------- | ---------------------------------------------------------------------------------- |
-| `PORT`                    | `8080`               | HTTP port (set by Cloud Run)                                                       |
-| `PUBLISHER`               | `pubsub`             | `pubsub` – Google Cloud Pub/Sub (or emulator); `log` – mocked, messages are logged |
-| `OUTPUT_TOPIC`            | `orders.transformed` | Topic for transformed orders                                                       |
-| `DEAD_LETTER_TOPIC`       | `orders.failed`      | Topic for failed messages                                                          |
-| `MAX_DELIVERY_ATTEMPTS`   | `5`                  | Attempts before a transient failure is dead-lettered                               |
-| `IDEMPOTENCY_TTL_SECONDS` | `86400`              | How long processed `messageId`s are remembered                                     |
-| `BODY_LIMIT_BYTES`        | `15728640`           | Max request size (Pub/Sub messages ≤ 10 MB + Base64 envelope overhead)             |
-| `SHUTDOWN_TIMEOUT_MS`     | `9000`               | Force exit if graceful shutdown takes longer (Cloud Run kills ~10 s after SIGTERM) |
-| `LOG_LEVEL`               | `info`               | `trace` … `fatal`, `silent`                                                        |
-| `LOG_PRETTY`              | `false`              | Human-readable logs for local development                                          |
-| `GOOGLE_CLOUD_PROJECT`    | –                    | GCP project (auto-detected on Cloud Run)                                           |
-| `PUBSUB_EMULATOR_HOST`    | –                    | Use the Pub/Sub emulator, e.g. `localhost:8085`                                    |
+| Variable                  | Default              | Description                                                                                |
+| ------------------------- | -------------------- | ------------------------------------------------------------------------------------------ |
+| `PORT`                    | `8080`               | HTTP port (set by Cloud Run)                                                               |
+| `PUBLISHER`               | `pubsub`             | `pubsub` – Google Cloud Pub/Sub (or emulator); `log` – mocked, messages are logged         |
+| `OUTPUT_TOPIC`            | `orders.transformed` | Topic for transformed orders                                                               |
+| `DEAD_LETTER_TOPIC`       | `orders.failed`      | Topic for failed messages                                                                  |
+| `MAX_DELIVERY_ATTEMPTS`   | `5`                  | Attempts before a transient failure is dead-lettered                                       |
+| `IDEMPOTENCY_TTL_SECONDS` | `86400`              | How long processed `messageId`s are remembered                                             |
+| `BODY_LIMIT_BYTES`        | `15728640`           | Max request size (Pub/Sub messages ≤ 10 MB + Base64 envelope overhead)                     |
+| `SHUTDOWN_TIMEOUT_MS`     | `9000`               | Force exit if graceful shutdown takes longer (Cloud Run kills ~10 s after SIGTERM)         |
+| `LOG_LEVEL`               | `info`               | `trace` … `fatal`, `silent`                                                                |
+| `LOG_PRETTY`              | `false`              | Human-readable logs for local development                                                  |
+| `GOOGLE_CLOUD_PROJECT`    | –                    | GCP project; also enables linking log lines to Cloud Run request traces (set by Terraform) |
+| `PUBSUB_EMULATOR_HOST`    | –                    | Use the Pub/Sub emulator, e.g. `localhost:8085`                                            |
 
 Invalid values stop the service at startup with a list of all problems (fail fast).
 
@@ -618,7 +623,8 @@ messages; dependencies are wired by hand in `server.ts`. Fewer moving parts for 
 - **Pub/Sub schema** (Avro/Protobuf) on `orders.transformed` as the contract for downstream consumers.
 - **Alerting**: on DLQ growth, `ERROR` log rate and p95 `processing_duration`; a small **replay tool**
   that re-publishes records from `orders.failed` after a fix.
-- **OpenTelemetry tracing** propagated via Pub/Sub attributes, end to end across services.
+- **OpenTelemetry tracing** propagated via Pub/Sub attributes, end to end across services (today:
+  log lines are linked to the Cloud Run request trace only).
 - **CD pipeline**: build → push to Artifact Registry → `terraform apply` from GitHub Actions with
   Workload Identity Federation, per-environment workspaces/state.
 - **Multiple document formats** (cXML, other UBL versions) as additional transformers selected by
@@ -633,7 +639,7 @@ src/
   domain/           pure transformation: errors, decode-document, parse-ubl-order, map-ubl-order, order model
   application/      OrderProcessor (flow, idempotency, retry/DLQ policy), inbound-message, ports
   adapters/         PubSubPublisher, LogPublisher, InMemoryPublisher, in-memory stores, TTL cache
-  http/             Fastify app (push endpoint, health check, error contract)
+  http/             Fastify app (push endpoint, health check, error contract), trace log fields
   config.ts         environment configuration (fail fast)
   logger.ts         Cloud Logging structured logger
   shutdown.ts       SIGTERM/SIGINT handling with a shutdown timeout

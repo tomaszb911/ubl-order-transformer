@@ -3,7 +3,7 @@ import { loadConfig } from '../../src/config.js';
 
 describe('loadConfig', () => {
   it('uses sensible defaults', () => {
-    expect(loadConfig({})).toEqual({
+    expect(loadConfig({})).toStrictEqual({
       port: 8080,
       logLevel: 'info',
       logPretty: false,
@@ -26,6 +26,7 @@ describe('loadConfig', () => {
       DEAD_LETTER_TOPIC: 'dlq',
       MAX_DELIVERY_ATTEMPTS: '10',
       K_SERVICE: 'order-transformer',
+      GOOGLE_CLOUD_PROJECT: 'my-project',
     });
 
     expect(config).toMatchObject({
@@ -35,6 +36,7 @@ describe('loadConfig', () => {
       deadLetterTopic: 'dlq',
       maxDeliveryAttempts: 10,
       serviceName: 'order-transformer',
+      projectId: 'my-project',
     });
   });
 

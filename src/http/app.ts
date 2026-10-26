@@ -7,6 +7,7 @@ import Fastify, {
 } from 'fastify';
 import type { OrderProcessor, ProcessingResult } from '../application/order-processor.js';
 import { type ErrorCode, ProcessingError, ValidationError } from '../domain/errors.js';
+import { traceLogFields } from './trace.js';
 
 export const PUSH_ENDPOINT = '/pubsub/push';
 
@@ -14,6 +15,8 @@ export interface AppOptions {
   processor: OrderProcessor;
   logger: FastifyBaseLogger;
   bodyLimitBytes?: number;
+  /** GCP project id; enables correlating log lines with Cloud Run request traces. */
+  projectId?: string;
   /** Called when the server shuts down (e.g. to flush the publisher). */
   onClose?: () => Promise<void>;
 }
@@ -34,6 +37,7 @@ export function buildApp({
   processor,
   logger,
   bodyLimitBytes,
+  projectId,
   onClose,
 }: AppOptions): FastifyInstance {
   const app = Fastify({
@@ -51,6 +55,15 @@ export function buildApp({
     } catch {
       done(new ValidationError('Message must be a valid JSON document.'), undefined);
     }
+  });
+
+  // Every log line of a request (processor summary, warnings, errors) carries its trace id.
+  app.addHook('onRequest', (request, _reply, done) => {
+    const fields = traceLogFields(request.headers, projectId);
+    if (Object.keys(fields).length > 0) {
+      request.log = request.log.child(fields);
+    }
+    done();
   });
 
   app.get('/healthz', () => ({ status: 'ok' }));

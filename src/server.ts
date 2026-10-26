@@ -37,6 +37,7 @@ async function main(): Promise<void> {
     processor,
     logger,
     bodyLimitBytes: config.bodyLimitBytes,
+    ...(config.projectId !== undefined && { projectId: config.projectId }),
     onClose: () => publisher.close(),
   });
 
